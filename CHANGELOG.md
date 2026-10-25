@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.5.1] - 2026-10-25
+
+### Security
+- Test app: body-parser 2.3.0 -> 2.4.0 in `Test_App/yarn.lock` (denial of service via trailing bytes after a compressed request body); qs, iconv-lite and content-type follow its new floors
+
 ## [1.5.0] - 2026-10-24
 
 ### Security
