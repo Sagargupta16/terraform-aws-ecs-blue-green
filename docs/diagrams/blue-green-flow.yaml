@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Sagargupta16/orrery/main/skills/orrery/references/diagram.schema.json
+# Rendered with orrery (github.com/Sagargupta16/orrery):
+#   orrery render docs/diagrams/blue-green-flow.yaml -o docs/diagrams/blue-green-flow -f svg --theme both
+# Reviewed at README width: orrery review docs/diagrams/blue-green-flow.yaml --width 880
+title: One build, blue to green
+subtitle: "Main pipeline into test, deployment_engine = codedeploy (default). Prod repeats it after Manual-Approval with the same artifact; the ecs engine makes the same shifts on listener-rule weights and also rolls back on its circuit breaker."
+kind: sequence
+
+# Left to right as they take part: a push to the main branch starts it. The
+# alarms stand beside the CodeDeploy deployment group that watches them.
+groups:
+  cloud: { type: aws:cloud, evidence: terraform/versions.tf:3 }
+  env: { type: aws:generic, label: test environment, in: cloud, evidence: "terraform/main.tf:134#codedeploy_test" }
+
+nodes:
+  github: { icon: logos:github-icon, label: GitHub repository, note: "main branch, via CodeConnections", evidence: "terraform/codepipeline_main/main.tf:97#ConnectionArn" }
+  pipeline: { icon: aws:codepipeline, label: AWS CodePipeline, note: main pipeline, in: cloud, evidence: "terraform/codepipeline_main/main.tf:57#aws_codepipeline" }
+  build: { icon: aws:codebuild, label: AWS CodeBuild, note: buildspec.yml, in: cloud, evidence: "terraform/codebuild/main.tf:10#aws_codebuild_project" }
+  ecr: { icon: aws:elastic-container-registry, label: Amazon Elastic Container Registry, in: cloud, evidence: "terraform/ecr/main.tf:10#aws_ecr_repository" }
+  deploy: { icon: aws:codedeploy, label: AWS CodeDeploy, note: deployment group, in: env, evidence: "terraform/codedeploy/main.tf:83#aws_codedeploy_deployment_group" }
+  alarms: { icon: aws:cloudwatch-alarm, label: CloudWatch alarms, note: "Amazon CloudWatch: Target-5XX, Unhealthy-Hosts", in: env, evidence: "terraform/ecs/main.tf:184#target_5xx" }
+  ecs: { icon: aws:elastic-container-service, label: Amazon Elastic Container Service, note: blue and green task sets, in: env, evidence: "terraform/ecs/main.tf:72#aws_ecs_service" }
+  alb: { icon: aws:elastic-load-balancing-application-load-balancer, label: Application Load Balancer, note: ":80 prod, :8080 test; blue, green target groups", in: env, evidence: ["terraform/alb/main.tf:3#aws_lb", "terraform/codedeploy/main.tf:131#target_group"] }
+
+# Top to bottom is time: calls solid, replies dashed back to the caller.
+edges:
+  - github -> pipeline: { label: push, evidence: ["terraform/codepipeline_main/main.tf:73#CodeStarSourceConnection", "terraform/codepipeline_main/main.tf:77#push"] }
+  - pipeline -> build: { label: StartBuild (source), evidence: ["terraform/codepipeline_main/main.tf:111#CodeBuild", "terraform/iam/main.tf:336#StartBuild"] }
+  - build -> build: { label: "80% test gate, docker build", evidence: "buildspec.yml:40#yarn test --coverage" }
+  - build -> ecr: { label: docker push, evidence: "buildspec.yml:45#docker push" }
+  - ecr --> build: { label: sha256 digest, evidence: "buildspec.yml:47#RepoDigests" }
+  - build --> pipeline: { label: "taskdef.json, imageDetail.json", evidence: ["buildspec.yml:50#render-deploy-artifacts.sh", "scripts/render-deploy-artifacts.sh:60#imageDetail.json"] }
+  - pipeline -> deploy: { label: "Deploy-Test: new task definition, appspec.yml", evidence: "terraform/codepipeline_main/main.tf:129#deploy_provider" }
+  - deploy -> ecs: { label: CreateTaskSet (green), evidence: "terraform/iam/main.tf:242#CreateTaskSet" }
+  - deploy -> alb: { label: ":8080 test listener to green", evidence: "terraform/codedeploy/main.tf:139#test_traffic_route" }
+  - deploy -> alb: { label: "30% of :80 to green for 1 min", evidence: "terraform/codedeploy/main.tf:72#TimeBasedCanary" }
+  - deploy -> alarms: { label: DescribeAlarms, evidence: "terraform/iam/main.tf:269#DescribeAlarms" }
+  - alarms --> deploy: { label: alarm states, evidence: "terraform/codedeploy/main.tf:98#alarm_configuration" }
+  - deploy -> alb: { label: "all of :80 back to blue", evidence: "terraform/codedeploy/main.tf:93#DEPLOYMENT_STOP_ON_ALARM" }
+  - deploy -> ecs: { label: delete green task set, evidence: ["terraform/codedeploy/main.tf:91#auto_rollback_configuration", "terraform/iam/main.tf:243#DeleteTaskSet"] }
+  - deploy -> alb: { label: "other 70% of :80 to green", evidence: "terraform/codedeploy/main.tf:74#interval" }
+  - deploy -> ecs: { label: "delete blue task set after 1 min", evidence: "terraform/codedeploy/main.tf:111#termination_wait_time_in_minutes" }
+
+# Messages 13 and 14 are the rollback; 15 and 16 the normal finish.
+fragments:
+  - type: alt
+    label: an alarm in ALARM
+    from: 13
+    to: 16
+    else: [{ at: 15, label: both alarms OK }]
