@@ -31,33 +31,6 @@ The specs behind the pictures are [`docs/diagrams/runtime.yaml`](docs/diagrams/r
 <details>
 <summary>Both engines in one Mermaid flowchart</summary>
 
-```mermaid
-flowchart LR
-    dev[git push] --> conn[CodeConnections]
-    conn --> pipe[CodePipeline V2]
-    subgraph cicd[CI/CD]
-        pipe --> build[CodeBuild<br/>Jest 80% gate, docker build]
-        build --> ecr[(ECR<br/>KMS, scan on push)]
-        build --> s3[(S3 artifacts, KMS<br/>taskdef.json + imageDetail.json<br/>pinned to the image digest)]
-        pipe --> deploy{deployment_engine}
-        deploy -- codedeploy --> cd[CodeDeployToECS<br/>TimeBasedCanary 30% / 1 min]
-        deploy -- ecs --> native[ECS deploy action<br/>ECS native CANARY 30% / 1 min]
-    end
-    subgraph env[Per environment: dev, test, prod]
-        alb[ALB<br/>:80 prod, :8080 test]
-        alb --> blue[Blue target group]
-        alb --> green[Green target group]
-        blue --> ecs[ECS service on EC2<br/>AL2023, ASG + capacity provider]
-        green --> ecs
-        cw[CloudWatch alarms<br/>target 5xx, unhealthy hosts] --> sns[SNS topic, KMS]
-    end
-    cd -- swap listeners --> alb
-    native -- rewrite rule weights --> alb
-    cw -. alarm = roll back .-> cd
-    cw -. alarm = roll back .-> native
-    ecr -. image pull by digest .-> ecs
-```
-
 </details>
 
 - **ECS on EC2**: containerized application hosting with an Auto Scaling Group of Amazon Linux 2023 container-instances (one cluster per environment)
