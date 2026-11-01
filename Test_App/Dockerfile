@@ -1,5 +1,5 @@
 # Client build stage
-FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-alpine AS client-builder
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:26-alpine AS client-builder
 
 WORKDIR /app/client
 
@@ -10,7 +10,7 @@ COPY client/ .
 RUN yarn build
 
 # Server stage
-FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:24-alpine AS server
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/node:26-alpine AS server
 
 WORKDIR /app
 

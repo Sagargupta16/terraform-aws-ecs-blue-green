@@ -34,7 +34,7 @@
   },
   "resolutions": {
     "proxy-addr": "^2.0.8",
-    "**/js-yaml/argparse": "^2.0.1",
+    "**/js-yaml/argparse": "^3.0.0",
     "shell-quote": "^1.11.0"
   }
 }
