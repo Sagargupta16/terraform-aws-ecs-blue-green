@@ -28,38 +28,6 @@ Infrastructure-as-Code for a multi-environment Blue/Green deployment pipeline on
 
 The specs behind the pictures are [`docs/diagrams/runtime.yaml`](docs/diagrams/runtime.yaml) and [`docs/diagrams/pipeline.yaml`](docs/diagrams/pipeline.yaml), rendered with [orrery](https://github.com/Sagargupta16/orrery).
 
-<details>
-<summary>Both engines in one Mermaid flowchart</summary>
-
-```mermaid
-flowchart LR
-    dev[git push] --> conn[CodeConnections]
-    conn --> pipe[CodePipeline V2]
-    subgraph cicd[CI/CD]
-        pipe --> build[CodeBuild<br/>Jest 80% gate, docker build]
-        build --> ecr[(ECR<br/>KMS, scan on push)]
-        build --> s3[(S3 artifacts, KMS<br/>taskdef.json + imageDetail.json<br/>pinned to the image digest)]
-        pipe --> deploy{deployment_engine}
-        deploy -- codedeploy --> cd[CodeDeployToECS<br/>TimeBasedCanary 30% / 1 min]
-        deploy -- ecs --> native[ECS deploy action<br/>ECS native CANARY 30% / 1 min]
-    end
-    subgraph env[Per environment: dev, test, prod]
-        alb[ALB<br/>:80 prod, :8080 test]
-        alb --> blue[Blue target group]
-        alb --> green[Green target group]
-        blue --> ecs[ECS service on EC2<br/>AL2023, ASG + capacity provider]
-        green --> ecs
-        cw[CloudWatch alarms<br/>target 5xx, unhealthy hosts] --> sns[SNS topic, KMS]
-    end
-    cd -- swap listeners --> alb
-    native -- rewrite rule weights --> alb
-    cw -. alarm = roll back .-> cd
-    cw -. alarm = roll back .-> native
-    ecr -. image pull by digest .-> ecs
-```
-
-</details>
-
 - **ECS on EC2**: containerized application hosting with an Auto Scaling Group of Amazon Linux 2023 container-instances (one cluster per environment)
 - **Application Load Balancer**: per-environment ALB with two target groups (blue/green) and two listeners (`:80` prod traffic, `:8080` test traffic). With the `ecs` engine each listener also gets a weighted rule that ECS shifts
 - **Auto Scaling Group + ECS Capacity Provider**: managed-scaling EC2 capacity for each cluster
@@ -282,26 +250,13 @@ Modules do **not** accept or forward a `tags` variable. Every taggable AWS resou
 
 ## Blue-Green Deployment Flow
 
-```mermaid
-sequenceDiagram
-    participant Dev as Developer
-    participant CP as CodePipeline
-    participant CB as CodeBuild
-    participant CD as CodeDeploy or ECS
-    participant ALB as ALB (80 prod, 8080 test)
-    participant CW as CloudWatch alarms
-    Dev->>CP: git push (CodeConnections)
-    CP->>CB: Source artifact (S3, KMS)
-    CB->>CB: yarn test --coverage (>= 80%), then docker build
-    CB->>CP: push image, emit taskdef.json + imageDetail.json (digest)
-    CP->>CD: deploy, registering a task definition pinned to that digest
-    CD->>ALB: start green tasks, test traffic on :8080
-    CD->>ALB: shift 30% of :80 traffic for 1 minute
-    CW-->>CD: 5xx or unhealthy target? roll back to blue
-    CD->>ALB: shift remaining 70%
-    CD->>CD: bake, then terminate blue
-    Note over CD,ALB: Failure, circuit breaker (ecs engine) or alarm sends traffic back to blue
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/blue-green-flow-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/diagrams/blue-green-flow-light.svg">
+  <img width="880" src="docs/diagrams/blue-green-flow-light.svg" alt="One main pipeline run into the test environment, shown with deployment_engine set to codedeploy, the default. A push to the main branch of the GitHub repository reaches AWS CodePipeline through CodeConnections, and CodePipeline starts AWS CodeBuild with the source. CodeBuild runs the 80% test gate and the docker build, pushes the image to Amazon Elastic Container Registry, gets back its sha256 digest and returns taskdef.json and imageDetail.json to the pipeline. The Deploy-Test stage hands AWS CodeDeploy a new task definition and appspec.yml. CodeDeploy creates the green task set on Amazon Elastic Container Service, points the Application Load Balancer's :8080 test listener at the green target group, then sends 30% of :80 traffic to green for 1 minute and reads the Target-5XX and Unhealthy-Hosts CloudWatch alarms. If an alarm is in ALARM, CodeDeploy moves all of :80 back to blue and deletes the green task set. If both alarms are OK, it shifts the other 70% of :80 to green and deletes the blue task set 1 minute later. Prod repeats the deploy after Manual-Approval with the same artifact; the ecs engine makes the same shifts on listener-rule weights and also rolls back on its circuit breaker.">
+</picture>
+
+The spec behind the picture is [`docs/diagrams/blue-green-flow.yaml`](docs/diagrams/blue-green-flow.yaml), rendered with [orrery](https://github.com/Sagargupta16/orrery).
 
 The main pipeline runs this for test, waits at Manual-Approval, then runs it for prod with the same build artifact, so prod gets the digest test ran.
 
